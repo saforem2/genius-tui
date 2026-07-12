@@ -10,13 +10,15 @@ Synced lines highlight and auto-scroll in time with playback.
 > Note: Genius itself only has plain-text lyrics (no timestamps), which is
 > why LRCLIB is the primary source for true sync.
 
-## Run
+## Install & run
 
 ```sh
-uv run genius_tui.py
+uvx genius-tui            # run without installing
+# or
+pip install genius-tui && genius-tui
+# or, from a checkout
+uv run genius-tui
 ```
-
-(Dependencies — `textual`, `httpx` — are declared inline; `uv` handles them.)
 
 ## Now-playing backends
 

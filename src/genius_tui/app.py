@@ -1,18 +1,10 @@
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#   "textual>=0.80",
-#   "httpx>=0.27",
-# ]
-# ///
 """genius-tui — synced lyrics for whatever is playing, in your terminal.
 
 Detects the currently playing song system-wide on macOS, fetches
 time-synchronized lyrics from LRCLIB (free, no API key), and falls back to
 scraping plain lyrics from Genius when no synced version exists.
 
-Run:  uv run genius_tui.py
+Run:  genius-tui  (or: uvx genius-tui)
 Keys: q quit · r refresh · +/- sync offset · f toggle follow
 """
 
@@ -520,5 +512,10 @@ class GeniusTui(App):
         self.follow = not self.follow
 
 
-if __name__ == "__main__":
+def run() -> None:
+    """Console-script entry point."""
     GeniusTui().run()
+
+
+if __name__ == "__main__":
+    run()
