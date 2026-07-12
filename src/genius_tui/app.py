@@ -356,7 +356,7 @@ class GeniusTui(App):
     LyricLine { width: 100%; text-align: center; color: $text-muted; }
     LyricLine.past { color: $text-disabled; }
     LyricLine.current { color: $text; text-style: bold; background: $boost; }
-    #message { width: 100%; content-align: center middle; color: $text-muted; }
+    .message { width: 100%; content-align: center middle; color: $text-muted; }
     """
 
     BINDINGS = [
@@ -383,7 +383,9 @@ class GeniusTui(App):
     def compose(self) -> ComposeResult:
         yield Static("♪ waiting for music…", id="header")
         yield Static("", id="status")
-        yield VerticalScroll(Static("Nothing playing yet.", id="message"), id="lyrics")
+        yield VerticalScroll(
+            Static("Nothing playing yet.", classes="message"), id="lyrics"
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -433,7 +435,7 @@ class GeniusTui(App):
     def show_message(self, text: str) -> None:
         box = self.query_one("#lyrics", VerticalScroll)
         box.remove_children()
-        box.mount(Static(text, id="message"))
+        box.mount(Static(text, classes="message"))
 
     async def show_lyrics(self, lyrics: Lyrics) -> None:
         box = self.query_one("#lyrics", VerticalScroll)
