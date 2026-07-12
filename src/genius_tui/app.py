@@ -5,7 +5,7 @@ time-synchronized lyrics from LRCLIB (free, no API key), and falls back to
 scraping plain lyrics from Genius when no synced version exists.
 
 Run:  genius-tui  (or: uvx genius-tui)
-Keys: q quit · r refresh · +/- sync offset · f toggle follow
+Keys: q quit · r refresh · +/- sync offset · f toggle follow · l lyrics only
 """
 
 from __future__ import annotations
@@ -373,7 +373,7 @@ class GeniusTui(App):
         text-style: bold;
     }
     #status { height: 1; padding: 0 2; color: $text-muted; }
-    #lyrics { padding: 1 4; }
+    #lyrics { padding: 1 4; overflow-y: scroll; }
     #lyrics.lyrics-only { scrollbar-size-vertical: 0; }
     LyricLine { width: 100%; text-align: left; color: $text-muted; }
     LyricLine.past { color: $text-muted; text-style: dim; }
@@ -414,6 +414,7 @@ class GeniusTui(App):
         yield Footer(id="footer")
 
     def on_mount(self) -> None:
+        self.query_one("#lyrics", VerticalScroll).show_vertical_scrollbar = True
         self.set_interval(POLL_SECONDS, self.poll_player)
         self.set_interval(TICK_SECONDS, self.tick)
         self.call_later(self.poll_player)
