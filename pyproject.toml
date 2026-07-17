@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "genius-tui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Textual TUI displaying synced lyrics for the currently playing song (LRCLIB + Genius)"
 readme = "README.md"
 license = { text = "MIT" }
