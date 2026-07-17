@@ -5,7 +5,7 @@ time-synchronized lyrics from LRCLIB (free, no API key), and falls back to
 scraping plain lyrics from Genius when no synced version exists.
 
 Run:  genius-tui  (or: uvx genius-tui)
-Keys: q quit · r refresh · +/- sync offset · f toggle follow
+Keys: q quit · r refresh · +/- sync offset · f toggle follow · l lyrics only
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import html as htmllib
 import json
+import os
+import platform
 import re
 import shutil
 import subprocess
@@ -28,6 +30,20 @@ from textual.widgets import Footer, Static
 USER_AGENT = "genius-tui/0.1 (https://github.com/samforeman/genius-tui)"
 POLL_SECONDS = 1.0
 TICK_SECONDS = 0.25
+
+
+def terminal_prefers_light_theme() -> bool:
+    colorfgbg = os.environ.get("COLORFGBG", "")
+    if colorfgbg:
+        try:
+            return int(colorfgbg.rsplit(";", 1)[-1]) >= 7
+        except ValueError:
+            pass
+    appearance = os.environ.get("APPLE_INTERFACE_STYLE", "")
+    if appearance:
+        return appearance.lower() != "dark"
+    return platform.system() == "Darwin"
+
 
 # --------------------------------------------------------------------------
 # Now-playing detection (macOS, system-wide with per-app fallbacks)
@@ -336,7 +352,12 @@ def fmt_time(s: float) -> str:
 
 
 class LyricLine(Static):
-    pass
+    def __init__(self, line: str, *args: object, **kwargs: object) -> None:
+        super().__init__(f"  {line}", *args, **kwargs)
+        self.line = line
+
+    def set_current(self, current: bool) -> None:
+        self.update(f"▸ {self.line}" if current else f"  {self.line}")
 
 
 class GeniusTui(App):
@@ -352,10 +373,11 @@ class GeniusTui(App):
         text-style: bold;
     }
     #status { height: 1; padding: 0 2; color: $text-muted; }
-    #lyrics { padding: 1 4; }
-    LyricLine { width: 100%; text-align: center; color: $text-muted; }
-    LyricLine.past { color: $text-disabled; }
-    LyricLine.current { color: $text; text-style: bold; background: $boost; }
+    #lyrics { padding: 1 4; overflow-y: scroll; }
+    #lyrics.lyrics-only { scrollbar-size-vertical: 0; }
+    LyricLine { width: 100%; text-align: left; color: $text-muted; }
+    LyricLine.past { color: $text-muted; text-style: dim; }
+    LyricLine.current { color: ansi_blue; text-style: bold; }
     .message { width: 100%; content-align: center middle; color: $text-muted; }
     """
 
@@ -365,10 +387,12 @@ class GeniusTui(App):
         ("plus,equals_sign", "offset(0.5)", "Delay +0.5s"),
         ("minus", "offset(-0.5)", "Delay -0.5s"),
         ("f", "toggle_follow", "Follow"),
+        ("l", "toggle_lyrics_only", "Lyrics only"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
+        self.theme = "ansi-light" if terminal_prefers_light_theme() else "ansi-dark"
         self.client = httpx.AsyncClient(
             headers={"User-Agent": USER_AGENT}, timeout=10
         )
@@ -377,6 +401,7 @@ class GeniusTui(App):
         self.backend = ""
         self.offset = 0.0
         self.follow = True
+        self.lyrics_only = False
         self.current_idx = -1
         self._fetch_task: asyncio.Task | None = None
 
@@ -386,9 +411,10 @@ class GeniusTui(App):
         yield VerticalScroll(
             Static("Nothing playing yet.", classes="message"), id="lyrics"
         )
-        yield Footer()
+        yield Footer(id="footer")
 
     def on_mount(self) -> None:
+        self.query_one("#lyrics", VerticalScroll).show_vertical_scrollbar = True
         self.set_interval(POLL_SECONDS, self.poll_player)
         self.set_interval(TICK_SECONDS, self.tick)
         self.call_later(self.poll_player)
@@ -490,7 +516,9 @@ class GeniusTui(App):
             return
         self.current_idx = idx
         for i, w in enumerate(lines):
-            w.set_class(i == idx, "current")
+            current = i == idx
+            w.set_current(current)
+            w.set_class(current, "current")
             w.set_class(i < idx, "past")
         if self.follow and 0 <= idx < len(lines):
             box = self.query_one("#lyrics", VerticalScroll)
@@ -512,6 +540,16 @@ class GeniusTui(App):
 
     def action_toggle_follow(self) -> None:
         self.follow = not self.follow
+
+    def action_toggle_lyrics_only(self) -> None:
+        self.lyrics_only = not self.lyrics_only
+        show_chrome = not self.lyrics_only
+        self.query_one("#header", Static).display = show_chrome
+        self.query_one("#status", Static).display = show_chrome
+        self.query_one("#footer", Footer).display = show_chrome
+        lyrics = self.query_one("#lyrics", VerticalScroll)
+        lyrics.show_vertical_scrollbar = show_chrome
+        lyrics.set_class(self.lyrics_only, "lyrics-only")
 
 
 def run() -> None:

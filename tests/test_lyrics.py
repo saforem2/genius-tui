@@ -2,7 +2,17 @@ import time
 
 import pytest
 
-from genius_tui.app import Track, _extract_lyrics_containers, fmt_time, parse_lrc
+from textual.containers import VerticalScroll
+from textual.widgets import Footer, Static
+
+from genius_tui.app import (
+    GeniusTui,
+    Track,
+    _extract_lyrics_containers,
+    fmt_time,
+    parse_lrc,
+    terminal_prefers_light_theme,
+)
 
 
 def test_parse_lrc_basic():
@@ -53,3 +63,66 @@ def test_track_position_extrapolation():
 def test_fmt_time():
     assert fmt_time(261.9) == "4:21"
     assert fmt_time(-3) == "0:00"
+
+
+def test_terminal_prefers_light_theme_from_colorfgbg(monkeypatch):
+    monkeypatch.setenv("COLORFGBG", "0;15")
+    monkeypatch.delenv("APPLE_INTERFACE_STYLE", raising=False)
+    assert terminal_prefers_light_theme()
+
+    monkeypatch.setenv("COLORFGBG", "15;0")
+    assert not terminal_prefers_light_theme()
+
+
+def test_terminal_prefers_light_theme_from_macos_appearance(monkeypatch):
+    monkeypatch.delenv("COLORFGBG", raising=False)
+    monkeypatch.setenv("APPLE_INTERFACE_STYLE", "Dark")
+    assert not terminal_prefers_light_theme()
+
+    monkeypatch.setenv("APPLE_INTERFACE_STYLE", "Light")
+    assert terminal_prefers_light_theme()
+
+
+def test_terminal_prefers_light_theme_defaults_to_light_on_macos(monkeypatch):
+    monkeypatch.delenv("COLORFGBG", raising=False)
+    monkeypatch.delenv("APPLE_INTERFACE_STYLE", raising=False)
+    monkeypatch.setattr("genius_tui.app.platform.system", lambda: "Darwin")
+    assert terminal_prefers_light_theme()
+
+
+def test_terminal_prefers_light_theme_malformed_colorfgbg_falls_back(monkeypatch):
+    monkeypatch.setenv("COLORFGBG", "foo")
+    monkeypatch.setenv("APPLE_INTERFACE_STYLE", "Dark")
+    assert not terminal_prefers_light_theme()
+
+
+def test_terminal_prefers_light_theme_malformed_colorfgbg_no_fallback(monkeypatch):
+    monkeypatch.setenv("COLORFGBG", "foo")
+    monkeypatch.delenv("APPLE_INTERFACE_STYLE", raising=False)
+    assert isinstance(terminal_prefers_light_theme(), bool)
+
+
+@pytest.mark.anyio
+async def test_lyrics_only_toggle_hides_chrome():
+    app = GeniusTui()
+    async with app.run_test():
+        lyrics = app.query_one("#lyrics", VerticalScroll)
+        assert app.query_one("#header", Static).display
+        assert app.query_one("#status", Static).display
+        assert app.query_one("#footer", Footer).display
+        assert lyrics.show_vertical_scrollbar
+        assert not lyrics.has_class("lyrics-only")
+
+        app.action_toggle_lyrics_only()
+        assert not app.query_one("#header", Static).display
+        assert not app.query_one("#status", Static).display
+        assert not app.query_one("#footer", Footer).display
+        assert not lyrics.show_vertical_scrollbar
+        assert lyrics.has_class("lyrics-only")
+
+        app.action_toggle_lyrics_only()
+        assert app.query_one("#header", Static).display
+        assert app.query_one("#status", Static).display
+        assert app.query_one("#footer", Footer).display
+        assert lyrics.show_vertical_scrollbar
+        assert not lyrics.has_class("lyrics-only")
