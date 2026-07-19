@@ -7,6 +7,12 @@ time-synchronized lyrics from **LRCLIB** (free, no API key), and falls back
 to scraping plain lyrics from **Genius** when no synced version exists.
 Synced lines highlight and auto-scroll in time with playback.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
+  <img alt="genius-tui showing synced lyrics and album art" src="assets/screenshot-light.png">
+</picture>
+
 > Note: Genius itself only has plain-text lyrics (no timestamps), which is
 > why LRCLIB is the primary source for true sync.
 
@@ -42,6 +48,8 @@ terminal.
 | `r`   | Refetch lyrics                           |
 | `+`/`-` | Nudge sync offset ±0.5 s               |
 | `f`   | Toggle auto-follow (free scrolling)      |
+| `h`   | Toggle footer                            |
+| `l`   | Toggle lyrics-only mode                  |
 
 ## Behavior notes
 
