@@ -1,6 +1,9 @@
+import base64
+import io
 import time
 
 import pytest
+from PIL import Image
 
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Static
@@ -9,6 +12,7 @@ from genius_tui.app import (
     GeniusTui,
     Track,
     _extract_lyrics_containers,
+    decode_album_art_image,
     fmt_time,
     parse_lrc,
     terminal_prefers_light_theme,
@@ -65,6 +69,20 @@ def test_fmt_time():
     assert fmt_time(-3) == "0:00"
 
 
+def test_decode_album_art_image():
+    image = Image.new("RGB", (2, 2), (255, 0, 0))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    artwork = base64.b64encode(buffer.getvalue()).decode()
+    decoded = decode_album_art_image(artwork)
+    assert decoded is not None
+    assert decoded.size == (2, 2)
+
+
+def test_decode_album_art_image_handles_invalid_data():
+    assert decode_album_art_image("not base64") is None
+
+
 def test_terminal_prefers_light_theme_from_colorfgbg(monkeypatch):
     monkeypatch.setenv("COLORFGBG", "0;15")
     monkeypatch.delenv("APPLE_INTERFACE_STYLE", raising=False)
@@ -103,26 +121,55 @@ def test_terminal_prefers_light_theme_malformed_colorfgbg_no_fallback(monkeypatc
 
 
 @pytest.mark.anyio
+async def test_invalid_repeated_artwork_stays_hidden():
+    app = GeniusTui()
+    async with app.run_test():
+        track = Track(title="a", artist="b", artwork_data="AAAA")
+        app.update_album_art(track)
+        assert not app.query_one("#album-art").display
+        app.update_album_art(track)
+        assert not app.query_one("#album-art").display
+
+
+@pytest.mark.anyio
 async def test_lyrics_only_toggle_hides_chrome():
     app = GeniusTui()
     async with app.run_test():
         lyrics = app.query_one("#lyrics", VerticalScroll)
-        assert app.query_one("#header", Static).display
-        assert app.query_one("#status", Static).display
+        assert app.query_one("#title", Static).display
+        assert app.query_one("#source", Static).display
         assert app.query_one("#footer", Footer).display
-        assert lyrics.show_vertical_scrollbar
+        assert not lyrics.has_class("scrollbar-visible")
         assert not lyrics.has_class("lyrics-only")
 
-        app.action_toggle_lyrics_only()
-        assert not app.query_one("#header", Static).display
-        assert not app.query_one("#status", Static).display
+        app.show_scrollbar_temporarily()
+        assert lyrics.has_class("scrollbar-visible")
+        app.hide_scrollbar()
+        assert not lyrics.has_class("scrollbar-visible")
+
+        app.action_toggle_footer()
         assert not app.query_one("#footer", Footer).display
-        assert not lyrics.show_vertical_scrollbar
+        app.action_toggle_footer()
+        assert app.query_one("#footer", Footer).display
+
+        app.action_toggle_lyrics_only()
+        assert not app.query_one("#top").display
+        assert not app.query_one("#footer", Footer).display
+        assert not lyrics.has_class("scrollbar-visible")
         assert lyrics.has_class("lyrics-only")
 
         app.action_toggle_lyrics_only()
-        assert app.query_one("#header", Static).display
-        assert app.query_one("#status", Static).display
+        assert app.query_one("#top").display
         assert app.query_one("#footer", Footer).display
-        assert lyrics.show_vertical_scrollbar
+
+        assert not lyrics.has_class("scrollbar-visible")
         assert not lyrics.has_class("lyrics-only")
+
+        app.action_toggle_footer()
+        assert not app.query_one("#footer", Footer).display
+        app.action_toggle_lyrics_only()
+        assert not app.query_one("#top").display
+        assert not app.query_one("#footer", Footer).display
+        app.action_toggle_lyrics_only()
+        assert app.query_one("#top").display
+        assert not app.query_one("#footer", Footer).display

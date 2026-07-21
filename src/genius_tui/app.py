@@ -5,13 +5,16 @@ time-synchronized lyrics from LRCLIB (free, no API key), and falls back to
 scraping plain lyrics from Genius when no synced version exists.
 
 Run:  genius-tui  (or: uvx genius-tui)
-Keys: q quit · r refresh · +/- sync offset · f toggle follow · l lyrics only
+Keys: q quit · r refresh · +/- sync offset · f toggle follow · h footer · l lyrics only
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import html as htmllib
+import io
 import json
 import os
 import platform
@@ -23,13 +26,19 @@ from bisect import bisect_right
 from dataclasses import dataclass, field
 
 import httpx
+from PIL import Image
+from textual import events
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.timer import Timer
 from textual.widgets import Footer, Static
+from textual_image.widget import TGPImage
 
 USER_AGENT = "genius-tui/0.1 (https://github.com/samforeman/genius-tui)"
 POLL_SECONDS = 1.0
 TICK_SECONDS = 0.25
+SCROLLBAR_VISIBLE_SECONDS = 1.0
+FOLLOW_SCROLLBAR_THRESHOLD = 6
 
 
 def terminal_prefers_light_theme() -> bool:
@@ -55,6 +64,7 @@ class Track:
     title: str
     artist: str
     album: str = ""
+    artwork_data: str = ""
     duration: float = 0.0  # seconds
     position: float = 0.0  # seconds, at time `grabbed`
     playing: bool = True
@@ -112,6 +122,7 @@ def _from_media_control() -> Track | None:
         title=str(data.get("title") or ""),
         artist=str(data.get("artist") or ""),
         album=str(data.get("album") or ""),
+        artwork_data=str(data.get("artworkData") or ""),
         duration=float(data.get("duration") or 0.0),
         position=pos,
         playing=playing,
@@ -351,6 +362,77 @@ def fmt_time(s: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def decode_album_art_image(artwork_data: str) -> Image.Image | None:
+    if not artwork_data:
+        return None
+    try:
+        raw = base64.b64decode(artwork_data, validate=True)
+        return Image.open(io.BytesIO(raw)).convert("RGB")
+    except (binascii.Error, OSError, ValueError):
+        return None
+
+
+async def fetch_image_url(client: httpx.AsyncClient, url: str) -> Image.Image | None:
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        return Image.open(io.BytesIO(response.content)).convert("RGB")
+    except (httpx.HTTPError, OSError):
+        return None
+
+
+async def fetch_album_art(client: httpx.AsyncClient, track: Track) -> Image.Image | None:
+    try:
+        genius = await client.get(
+            "https://genius.com/api/search/multi",
+            params={"q": f"{track.artist} {track.title}"},
+        )
+        genius.raise_for_status()
+        for section in genius.json().get("response", {}).get("sections", []):
+            for hit in section.get("hits", []):
+                result = hit.get("result", {})
+                if hit.get("type") == "song":
+                    url = result.get("song_art_image_url") or result.get("header_image_url")
+                    if url and (image := await fetch_image_url(client, url)):
+                        return image
+    except (httpx.HTTPError, json.JSONDecodeError):
+        pass
+    try:
+        response = await client.get(
+            "https://itunes.apple.com/search",
+            params={
+                "term": f"{track.artist} {track.title}",
+                "entity": "song",
+                "limit": "1",
+            },
+        )
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        if results and (url := results[0].get("artworkUrl100")):
+            return await fetch_image_url(client, url)
+    except (httpx.HTTPError, json.JSONDecodeError):
+        pass
+    return None
+
+
+class StableTGPImage(TGPImage, Renderable=TGPImage._Renderable):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self._render_key = None
+
+    def render(self):
+        if not self.image:
+            return ""
+        size = self._get_styled_size()
+        key = (size, self.region)
+        if not self._renderable or self._render_key != key:
+            if self._renderable:
+                self._renderable.cleanup()
+            self._render_key = key
+            self._renderable = self._Renderable(self.image, *size)
+        return self._renderable
+
+
 class LyricLine(Static):
     def __init__(self, line: str, *args: object, **kwargs: object) -> None:
         super().__init__(f"  {line}", *args, **kwargs)
@@ -365,15 +447,15 @@ class GeniusTui(App):
 
     CSS = """
     Screen { layout: vertical; }
-    #header {
-        height: 2;
-        padding: 0 2;
-        background: $boost;
-        color: $text;
-        text-style: bold;
-    }
-    #status { height: 1; padding: 0 2; color: $text-muted; }
-    #lyrics { padding: 1 4; overflow-y: scroll; }
+    #top { height: auto; padding: 0 0 0 1; }
+    #track-info { width: 1fr; height: auto; padding: 0 0 0 1; }
+    #title { color: $text; text-style: bold; }
+    #artist-album { color: $text-muted; }
+    #source { color: $text-muted; }
+    #time { color: $text-muted; }
+    #album-art { width: 13; height: 4; }
+    #lyrics { height: 1fr; padding: 1 4; overflow-y: scroll; scrollbar-size-vertical: 0; }
+    #lyrics.scrollbar-visible { scrollbar-size-vertical: 2; }
     #lyrics.lyrics-only { scrollbar-size-vertical: 0; }
     LyricLine { width: 100%; text-align: left; color: $text-muted; }
     LyricLine.past { color: $text-muted; text-style: dim; }
@@ -387,6 +469,7 @@ class GeniusTui(App):
         ("plus,equals_sign", "offset(0.5)", "Delay +0.5s"),
         ("minus", "offset(-0.5)", "Delay -0.5s"),
         ("f", "toggle_follow", "Follow"),
+        ("h", "toggle_footer", "Footer"),
         ("l", "toggle_lyrics_only", "Lyrics only"),
     ]
 
@@ -401,26 +484,49 @@ class GeniusTui(App):
         self.backend = ""
         self.offset = 0.0
         self.follow = True
+        self.footer_hidden = False
         self.lyrics_only = False
         self.current_idx = -1
+        self._artwork_key: str = ""
+        self._artwork_track_key: tuple[str, str] | None = None
+        self._metadata: dict[str, str] = {}
+        self._artwork_task: asyncio.Task | None = None
         self._fetch_task: asyncio.Task | None = None
+        self._scrollbar_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("♪ waiting for music…", id="header")
-        yield Static("", id="status")
+        yield Horizontal(
+            StableTGPImage(id="album-art"),
+            Vertical(
+                Static("  0:00 / 0:00", id="time"),
+                Static("  waiting for music…", id="title"),
+                Static("  ", id="artist-album"),
+                Static("  —    —", id="source"),
+                id="track-info",
+            ),
+            id="top",
+        )
         yield VerticalScroll(
             Static("Nothing playing yet.", classes="message"), id="lyrics"
         )
         yield Footer(id="footer")
 
     def on_mount(self) -> None:
-        self.query_one("#lyrics", VerticalScroll).show_vertical_scrollbar = True
+        self.update_album_art(None)
+        self.hide_scrollbar()
         self.set_interval(POLL_SECONDS, self.poll_player)
         self.set_interval(TICK_SECONDS, self.tick)
         self.call_later(self.poll_player)
 
     async def on_unmount(self) -> None:
+        if self._artwork_task:
+            self._artwork_task.cancel()
         await self.client.aclose()
+
+    def update_static(self, selector: str, value: str) -> None:
+        if self._metadata.get(selector) != value:
+            self._metadata[selector] = value
+            self.query_one(selector, Static).update(value)
 
     # -- player polling ----------------------------------------------------
 
@@ -430,12 +536,16 @@ class GeniusTui(App):
         old_key = self.track.key if self.track else None
         self.track = track
         if track is None:
-            self.query_one("#header", Static).update("♪ nothing playing")
+            self.update_static("#time", "  0:00 / 0:00")
+            self.update_static("#title", "  nothing playing")
+            self.update_static("#artist-album", "  ")
+            self.update_static("#source", "  —    —")
+            self.update_album_art(None)
             return
-        header = f"♪ {track.title} — {track.artist}"
-        if track.album:
-            header += f"  ·  {track.album}"
-        self.query_one("#header", Static).update(header)
+        self.update_static("#title", f"  {track.title}")
+        album = f"  󰀥  {track.album}" if track.album else ""
+        self.update_static("#artist-album", f"  {track.artist}{album}")
+        self.update_album_art(track)
         if track.key != old_key:
             self.lyrics = None
             self.current_idx = -1
@@ -455,6 +565,62 @@ class GeniusTui(App):
                 self.show_message("No lyrics found for this track.")
             else:
                 await self.show_lyrics(lyrics)
+
+    def apply_layout(self) -> None:
+        show_chrome = not self.lyrics_only
+        art = self.query_one("#album-art", StableTGPImage)
+        self.query_one("#top", Horizontal).display = show_chrome
+        self.query_one("#footer", Footer).display = show_chrome and not self.footer_hidden
+        art.display = show_chrome and art.image is not None
+
+    def update_album_art(self, track: Track | None) -> None:
+        art = self.query_one("#album-art", StableTGPImage)
+        key = track.artwork_data if track else ""
+        track_key = track.key if track else None
+        if track is None:
+            if self._artwork_task:
+                self._artwork_task.cancel()
+                self._artwork_task = None
+            self._artwork_key = ""
+            self._artwork_track_key = None
+            art.image = None
+            self.apply_layout()
+            return
+        if key:
+            if self._artwork_task:
+                self._artwork_task.cancel()
+                self._artwork_task = None
+            if key != self._artwork_key:
+                self._artwork_key = key
+                self._artwork_track_key = track_key
+                art.image = decode_album_art_image(key)
+            self.apply_layout()
+            return
+        if self._artwork_track_key == track_key:
+            self.apply_layout()
+            return
+        if self._artwork_task:
+            self._artwork_task.cancel()
+            self._artwork_task = None
+        self._artwork_key = ""
+        self._artwork_track_key = track_key
+        art.image = None
+        self.apply_layout()
+        self._artwork_task = asyncio.create_task(self.load_album_art(track))
+
+    async def load_album_art(self, track: Track) -> None:
+        task = asyncio.current_task()
+        try:
+            image = await fetch_album_art(self.client, track)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._artwork_task is task:
+                self._artwork_task = None
+        if self.track and self.track.key == track.key and image is not None:
+            art = self.query_one("#album-art", StableTGPImage)
+            art.image = image
+            self.apply_layout()
 
     # -- rendering ---------------------------------------------------------
 
@@ -478,22 +644,14 @@ class GeniusTui(App):
         self.current_idx = -1
 
     def tick(self) -> None:
-        # status bar
-        status = self.query_one("#status", Static)
-        parts = []
         if self.track:
             pos = self.track.position_now()
-            state = "▶" if self.track.playing else "⏸"
-            parts.append(f"{state} {fmt_time(pos)}/{fmt_time(self.track.duration)}")
-        if self.lyrics:
-            parts.append(self.lyrics.source)
-        if self.backend:
-            parts.append(f"via {self.backend}")
-        if self.offset:
-            parts.append(f"offset {self.offset:+.1f}s")
-        if not self.follow:
-            parts.append("follow off")
-        status.update("  ·  ".join(parts))
+            self.update_static(
+                "#time", f"  {fmt_time(pos)} / {fmt_time(self.track.duration)}"
+            )
+        source = self.lyrics.source if self.lyrics else "—"
+        backend = f"via {self.backend}" if self.backend else "—"
+        self.update_static("#source", f"  {source}    {backend}")
 
         if not (self.track and self.lyrics):
             return
@@ -514,6 +672,10 @@ class GeniusTui(App):
             return
         if idx == self.current_idx:
             return
+        jumped = (
+            self.current_idx >= 0
+            and abs(idx - self.current_idx) >= FOLLOW_SCROLLBAR_THRESHOLD
+        )
         self.current_idx = idx
         for i, w in enumerate(lines):
             current = i == idx
@@ -522,7 +684,37 @@ class GeniusTui(App):
             w.set_class(i < idx, "past")
         if self.follow and 0 <= idx < len(lines):
             box = self.query_one("#lyrics", VerticalScroll)
-            box.scroll_to_center(lines[idx], animate=True)
+            box.scroll_to_center(lines[idx], animate=False)
+            if jumped:
+                self.show_scrollbar_temporarily()
+
+    def show_scrollbar_temporarily(self) -> None:
+        lyrics = self.query_one("#lyrics", VerticalScroll)
+        if self.lyrics_only:
+            self.hide_scrollbar()
+            return
+        lyrics.show_vertical_scrollbar = True
+        lyrics.set_class(True, "scrollbar-visible")
+        if self._scrollbar_timer:
+            self._scrollbar_timer.stop()
+        self._scrollbar_timer = self.set_timer(
+            SCROLLBAR_VISIBLE_SECONDS, self.hide_scrollbar
+        )
+
+    def hide_scrollbar(self) -> None:
+        lyrics = self.query_one("#lyrics", VerticalScroll)
+        lyrics.show_vertical_scrollbar = False
+        lyrics.set_class(False, "scrollbar-visible")
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        self.show_scrollbar_temporarily()
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        self.show_scrollbar_temporarily()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in {"up", "down", "pageup", "pagedown", "home", "end"}:
+            self.show_scrollbar_temporarily()
 
     # -- actions -------------------------------------------------------------
 
@@ -541,15 +733,16 @@ class GeniusTui(App):
     def action_toggle_follow(self) -> None:
         self.follow = not self.follow
 
+    def action_toggle_footer(self) -> None:
+        self.footer_hidden = not self.footer_hidden
+        self.apply_layout()
+
     def action_toggle_lyrics_only(self) -> None:
         self.lyrics_only = not self.lyrics_only
-        show_chrome = not self.lyrics_only
-        self.query_one("#header", Static).display = show_chrome
-        self.query_one("#status", Static).display = show_chrome
-        self.query_one("#footer", Footer).display = show_chrome
         lyrics = self.query_one("#lyrics", VerticalScroll)
-        lyrics.show_vertical_scrollbar = show_chrome
         lyrics.set_class(self.lyrics_only, "lyrics-only")
+        self.hide_scrollbar()
+        self.apply_layout()
 
 
 def run() -> None:
