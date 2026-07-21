@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import html as htmllib
 import io
 import json
@@ -367,7 +368,7 @@ def decode_album_art_image(artwork_data: str) -> Image.Image | None:
     try:
         raw = base64.b64decode(artwork_data, validate=True)
         return Image.open(io.BytesIO(raw)).convert("RGB")
-    except Exception:
+    except (binascii.Error, OSError, ValueError):
         return None
 
 
@@ -565,38 +566,61 @@ class GeniusTui(App):
             else:
                 await self.show_lyrics(lyrics)
 
+    def apply_layout(self) -> None:
+        show_chrome = not self.lyrics_only
+        art = self.query_one("#album-art", StableTGPImage)
+        self.query_one("#top", Horizontal).display = show_chrome
+        self.query_one("#footer", Footer).display = show_chrome and not self.footer_hidden
+        art.display = show_chrome and art.image is not None
+
     def update_album_art(self, track: Track | None) -> None:
         art = self.query_one("#album-art", StableTGPImage)
         key = track.artwork_data if track else ""
         track_key = track.key if track else None
+        if track is None:
+            if self._artwork_task:
+                self._artwork_task.cancel()
+                self._artwork_task = None
+            self._artwork_key = ""
+            self._artwork_track_key = None
+            art.image = None
+            self.apply_layout()
+            return
+        if key:
+            if self._artwork_task:
+                self._artwork_task.cancel()
+                self._artwork_task = None
+            if key != self._artwork_key:
+                self._artwork_key = key
+                self._artwork_track_key = track_key
+                art.image = decode_album_art_image(key)
+            self.apply_layout()
+            return
+        if self._artwork_track_key == track_key:
+            self.apply_layout()
+            return
         if self._artwork_task:
             self._artwork_task.cancel()
             self._artwork_task = None
-        if key:
-            if key == self._artwork_key:
-                art.display = not self.lyrics_only
-                return
-            self._artwork_key = key
-            self._artwork_track_key = track_key
-            art.image = decode_album_art_image(key)
-            art.display = art.image is not None and not self.lyrics_only
-            return
         self._artwork_key = ""
         self._artwork_track_key = track_key
         art.image = None
-        art.display = False
-        if track:
-            self._artwork_task = asyncio.create_task(self.load_album_art(track))
+        self.apply_layout()
+        self._artwork_task = asyncio.create_task(self.load_album_art(track))
 
     async def load_album_art(self, track: Track) -> None:
+        task = asyncio.current_task()
         try:
             image = await fetch_album_art(self.client, track)
         except asyncio.CancelledError:
             return
+        finally:
+            if self._artwork_task is task:
+                self._artwork_task = None
         if self.track and self.track.key == track.key and image is not None:
             art = self.query_one("#album-art", StableTGPImage)
             art.image = image
-            art.display = not self.lyrics_only
+            self.apply_layout()
 
     # -- rendering ---------------------------------------------------------
 
@@ -711,18 +735,14 @@ class GeniusTui(App):
 
     def action_toggle_footer(self) -> None:
         self.footer_hidden = not self.footer_hidden
-        if not self.lyrics_only:
-            self.query_one("#footer", Footer).display = not self.footer_hidden
+        self.apply_layout()
 
     def action_toggle_lyrics_only(self) -> None:
         self.lyrics_only = not self.lyrics_only
-        show_chrome = not self.lyrics_only
-        self.query_one("#top", Horizontal).display = show_chrome
-        self.query_one("#footer", Footer).display = show_chrome and not self.footer_hidden
-        self.query_one("#album-art", StableTGPImage).display = show_chrome and bool(self._artwork_key)
         lyrics = self.query_one("#lyrics", VerticalScroll)
         lyrics.set_class(self.lyrics_only, "lyrics-only")
         self.hide_scrollbar()
+        self.apply_layout()
 
 
 def run() -> None:

@@ -121,6 +121,17 @@ def test_terminal_prefers_light_theme_malformed_colorfgbg_no_fallback(monkeypatc
 
 
 @pytest.mark.anyio
+async def test_invalid_repeated_artwork_stays_hidden():
+    app = GeniusTui()
+    async with app.run_test():
+        track = Track(title="a", artist="b", artwork_data="AAAA")
+        app.update_album_art(track)
+        assert not app.query_one("#album-art").display
+        app.update_album_art(track)
+        assert not app.query_one("#album-art").display
+
+
+@pytest.mark.anyio
 async def test_lyrics_only_toggle_hides_chrome():
     app = GeniusTui()
     async with app.run_test():
@@ -153,3 +164,12 @@ async def test_lyrics_only_toggle_hides_chrome():
 
         assert not lyrics.has_class("scrollbar-visible")
         assert not lyrics.has_class("lyrics-only")
+
+        app.action_toggle_footer()
+        assert not app.query_one("#footer", Footer).display
+        app.action_toggle_lyrics_only()
+        assert not app.query_one("#top").display
+        assert not app.query_one("#footer", Footer).display
+        app.action_toggle_lyrics_only()
+        assert app.query_one("#top").display
+        assert not app.query_one("#footer", Footer).display
