@@ -365,6 +365,13 @@ def fmt_time(s: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def fmt_delay(offset: float) -> str:
+    """Format the sync offset for the header, e.g. ``delay +1.5s``."""
+    if not offset:
+        return ""
+    return f"delay {offset:+.1f}s"
+
+
 def decode_album_art_image(artwork_data: str) -> Image.Image | None:
     if not artwork_data:
         return None
@@ -452,10 +459,12 @@ class GeniusTui(App):
     Screen { layout: vertical; }
     #top { height: auto; padding: 0 0 0 1; }
     #track-info { width: 1fr; height: auto; padding: 0 0 0 1; }
+    #time-row { width: 1fr; height: auto; }
     #title { color: $text; text-style: bold; }
     #artist-album { color: $text-muted; }
     #source { color: $text-muted; }
-    #time { color: $text-muted; }
+    #time { width: auto; color: $text-muted; }
+    #delay { width: 1fr; color: $text-muted; text-align: right; padding: 0 1 0 0; }
     #album-art { width: 13; height: 4; }
     #lyrics { height: 1fr; padding: 1 4; overflow-y: scroll; scrollbar-size-vertical: 0; }
     #lyrics.scrollbar-visible { scrollbar-size-vertical: 2; }
@@ -504,7 +513,11 @@ class GeniusTui(App):
         yield Horizontal(
             StableTGPImage(id="album-art"),
             Vertical(
-                Static("  0:00 / 0:00", id="time"),
+                Horizontal(
+                    Static("  0:00 / 0:00", id="time"),
+                    Static("", id="delay"),
+                    id="time-row",
+                ),
                 Static("  waiting for music…", id="title"),
                 Static("  ", id="artist-album"),
                 Static("  —    —", id="source"),
@@ -752,6 +765,7 @@ class GeniusTui(App):
 
     def action_offset(self, delta: float) -> None:
         self.offset = round(self.offset + delta, 1)
+        self.update_static("#delay", fmt_delay(self.offset))
 
     def action_toggle_follow(self) -> None:
         self.follow = not self.follow

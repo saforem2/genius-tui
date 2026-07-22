@@ -14,6 +14,7 @@ from genius_tui.app import (
     _extract_lyrics_containers,
     decode_album_art_image,
     fetch_genius_url,
+    fmt_delay,
     fmt_time,
     parse_lrc,
     terminal_prefers_light_theme,
@@ -231,3 +232,33 @@ async def test_open_genius_uses_cached_url(monkeypatch):
         app.genius_url = "https://genius.com/song"
         app.action_open_genius()
         assert opened == ["https://genius.com/song"]
+
+
+def test_fmt_delay_zero_is_blank():
+    assert fmt_delay(0.0) == ""
+
+
+def test_fmt_delay_shows_sign_and_one_decimal():
+    assert fmt_delay(1.5) == "delay +1.5s"
+    assert fmt_delay(-0.5) == "delay -0.5s"
+
+
+@pytest.mark.anyio
+async def test_action_offset_updates_delay_indicator():
+    app = GeniusTui()
+    async with app.run_test():
+        delay = app.query_one("#delay", Static)
+        assert app.offset == 0.0
+        assert str(delay.render()) == ""
+
+        app.action_offset(0.5)
+        assert app.offset == 0.5
+        assert str(delay.render()) == "delay +0.5s"
+
+        app.action_offset(-1.0)
+        assert app.offset == -0.5
+        assert str(delay.render()) == "delay -0.5s"
+
+        app.action_offset(0.5)
+        assert app.offset == 0.0
+        assert str(delay.render()) == ""
