@@ -13,6 +13,7 @@ from genius_tui.app import (
     Track,
     _extract_lyrics_containers,
     decode_album_art_image,
+    fetch_genius_url,
     fmt_time,
     parse_lrc,
     terminal_prefers_light_theme,
@@ -173,3 +174,60 @@ async def test_lyrics_only_toggle_hides_chrome():
         app.action_toggle_lyrics_only()
         assert app.query_one("#top").display
         assert not app.query_one("#footer", Footer).display
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, payload):
+        self._payload = payload
+        self.calls = []
+
+    async def get(self, url, params=None):
+        self.calls.append((url, params))
+        return _FakeResponse(self._payload)
+
+
+@pytest.mark.anyio
+async def test_fetch_genius_url_returns_song_url():
+    payload = {
+        "response": {
+            "sections": [
+                {
+                    "hits": [
+                        {"type": "song", "result": {"url": "https://genius.com/song"}},
+                    ]
+                }
+            ]
+        }
+    }
+    client = _FakeClient(payload)
+    url = await fetch_genius_url(client, Track(title="a", artist="b"))
+    assert url == "https://genius.com/song"
+
+
+@pytest.mark.anyio
+async def test_fetch_genius_url_returns_none_when_no_song():
+    client = _FakeClient({"response": {"sections": []}})
+    url = await fetch_genius_url(client, Track(title="a", artist="b"))
+    assert url is None
+
+
+@pytest.mark.anyio
+async def test_open_genius_uses_cached_url(monkeypatch):
+    app = GeniusTui()
+    async with app.run_test():
+        opened = []
+        monkeypatch.setattr("genius_tui.app.webbrowser.open", opened.append)
+        app.genius_url = "https://genius.com/song"
+        app.action_open_genius()
+        assert opened == ["https://genius.com/song"]

@@ -50,6 +50,7 @@ terminal.
 | `f`   | Toggle auto-follow (free scrolling)      |
 | `h`   | Toggle footer                            |
 | `l`   | Toggle lyrics-only mode                  |
+| `o`   | Open the song's Genius page in a browser |
 
 ## Behavior notes
 

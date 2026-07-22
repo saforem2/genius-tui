@@ -5,7 +5,7 @@ time-synchronized lyrics from LRCLIB (free, no API key), and falls back to
 scraping plain lyrics from Genius when no synced version exists.
 
 Run:  genius-tui  (or: uvx genius-tui)
-Keys: q quit · r refresh · +/- sync offset · f toggle follow · h footer · l lyrics only
+Keys: q quit · r refresh · +/- sync offset · f toggle follow · h footer · l lyrics only · o open in Genius
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import time
+import webbrowser
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
@@ -316,7 +317,8 @@ def _extract_lyrics_containers(page: str) -> str:
     return "\n".join(out).strip()
 
 
-async def fetch_genius(client: httpx.AsyncClient, track: Track) -> Lyrics | None:
+async def fetch_genius_url(client: httpx.AsyncClient, track: Track) -> str | None:
+    """Find the Genius song page URL for a track."""
     q = f"{track.artist} {track.title}".strip()
     try:
         r = await client.get(
@@ -326,15 +328,16 @@ async def fetch_genius(client: httpx.AsyncClient, track: Track) -> Lyrics | None
         data = r.json()
     except (httpx.HTTPError, json.JSONDecodeError):
         return None
-    url = None
     for section in data.get("response", {}).get("sections", []):
         for hit in section.get("hits", []):
             result = hit.get("result", {})
             if hit.get("type") == "song" and result.get("url"):
-                url = result["url"]
-                break
-        if url:
-            break
+                return result["url"]
+    return None
+
+
+async def fetch_genius(client: httpx.AsyncClient, track: Track) -> Lyrics | None:
+    url = await fetch_genius_url(client, track)
     if not url:
         return None
     try:
@@ -471,6 +474,7 @@ class GeniusTui(App):
         ("f", "toggle_follow", "Follow"),
         ("h", "toggle_footer", "Footer"),
         ("l", "toggle_lyrics_only", "Lyrics only"),
+        ("o", "open_genius", "Open in Genius"),
     ]
 
     def __init__(self) -> None:
@@ -487,10 +491,12 @@ class GeniusTui(App):
         self.footer_hidden = False
         self.lyrics_only = False
         self.current_idx = -1
+        self.genius_url: str | None = None
         self._artwork_key: str = ""
         self._artwork_track_key: tuple[str, str] | None = None
         self._metadata: dict[str, str] = {}
         self._artwork_task: asyncio.Task | None = None
+        self._genius_task: asyncio.Task | None = None
         self._fetch_task: asyncio.Task | None = None
         self._scrollbar_timer: Timer | None = None
 
@@ -521,6 +527,8 @@ class GeniusTui(App):
     async def on_unmount(self) -> None:
         if self._artwork_task:
             self._artwork_task.cancel()
+        if self._genius_task:
+            self._genius_task.cancel()
         await self.client.aclose()
 
     def update_static(self, selector: str, value: str) -> None:
@@ -549,10 +557,14 @@ class GeniusTui(App):
         if track.key != old_key:
             self.lyrics = None
             self.current_idx = -1
+            self.genius_url = None
             self.show_message("Fetching lyrics…")
             if self._fetch_task:
                 self._fetch_task.cancel()
             self._fetch_task = asyncio.create_task(self.load_lyrics(track))
+            if self._genius_task:
+                self._genius_task.cancel()
+            self._genius_task = asyncio.create_task(self.load_genius_url(track))
 
     async def load_lyrics(self, track: Track) -> None:
         try:
@@ -565,6 +577,17 @@ class GeniusTui(App):
                 self.show_message("No lyrics found for this track.")
             else:
                 await self.show_lyrics(lyrics)
+
+    async def load_genius_url(self, track: Track) -> None:
+        try:
+            url = await fetch_genius_url(self.client, track)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._genius_task is asyncio.current_task():
+                self._genius_task = None
+        if self.track and self.track.key == track.key:
+            self.genius_url = url
 
     def apply_layout(self) -> None:
         show_chrome = not self.lyrics_only
@@ -743,6 +766,15 @@ class GeniusTui(App):
         lyrics.set_class(self.lyrics_only, "lyrics-only")
         self.hide_scrollbar()
         self.apply_layout()
+
+    def action_open_genius(self) -> None:
+        if self.genius_url:
+            webbrowser.open(self.genius_url)
+            self.notify(f"Opened {self.genius_url}")
+        elif self.track:
+            self.notify("No Genius page found yet for this track.", severity="warning")
+        else:
+            self.notify("Nothing playing.", severity="warning")
 
 
 def run() -> None:
