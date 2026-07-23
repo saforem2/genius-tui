@@ -197,6 +197,9 @@ class _FakeClient:
         self.calls.append((url, params))
         return _FakeResponse(self._payload)
 
+    async def aclose(self):
+        return None
+
 
 @pytest.mark.anyio
 async def test_fetch_genius_url_returns_song_url():
@@ -214,6 +217,9 @@ async def test_fetch_genius_url_returns_song_url():
     client = _FakeClient(payload)
     url = await fetch_genius_url(client, Track(title="a", artist="b"))
     assert url == "https://genius.com/song"
+    assert client.calls == [
+        ("https://genius.com/api/search/multi", {"q": "b a"})
+    ]
 
 
 @pytest.mark.anyio
@@ -224,14 +230,69 @@ async def test_fetch_genius_url_returns_none_when_no_song():
 
 
 @pytest.mark.anyio
+async def test_load_genius_url_sets_url_for_current_track():
+    payload = {
+        "response": {
+            "sections": [
+                {"hits": [{"type": "song", "result": {"url": "https://genius.com/x"}}]}
+            ]
+        }
+    }
+    app = GeniusTui()
+    async with app.run_test():
+        app.client = _FakeClient(payload)
+        track = Track(title="a", artist="b")
+        app.track = track
+        await app.load_genius_url(track)
+        assert app.genius_url == "https://genius.com/x"
+
+
+@pytest.mark.anyio
+async def test_load_genius_url_ignores_stale_track():
+    payload = {
+        "response": {
+            "sections": [
+                {"hits": [{"type": "song", "result": {"url": "https://genius.com/x"}}]}
+            ]
+        }
+    }
+    app = GeniusTui()
+    async with app.run_test():
+        app.client = _FakeClient(payload)
+        app.track = Track(title="new", artist="new")
+        await app.load_genius_url(Track(title="old", artist="old"))
+        assert app.genius_url is None
+
+
+@pytest.mark.anyio
 async def test_open_genius_uses_cached_url(monkeypatch):
     app = GeniusTui()
     async with app.run_test():
         opened = []
-        monkeypatch.setattr("genius_tui.app.webbrowser.open", opened.append)
+
+        def fake_open(url):
+            opened.append(url)
+            return True
+
+        monkeypatch.setattr("genius_tui.app.webbrowser.open", fake_open)
         app.genius_url = "https://genius.com/song"
         app.action_open_genius()
         assert opened == ["https://genius.com/song"]
+
+
+@pytest.mark.anyio
+async def test_open_genius_warns_when_browser_fails(monkeypatch):
+    app = GeniusTui()
+    async with app.run_test():
+        notes = []
+        monkeypatch.setattr("genius_tui.app.webbrowser.open", lambda url: False)
+        monkeypatch.setattr(
+            type(app), "notify",
+            lambda self, msg, **kw: notes.append((msg, kw.get("severity"))),
+        )
+        app.genius_url = "https://genius.com/song"
+        app.action_open_genius()
+        assert notes and notes[0][1] == "warning"
 
 
 def test_fmt_delay_zero_is_blank():

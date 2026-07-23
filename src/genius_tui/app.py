@@ -538,10 +538,9 @@ class GeniusTui(App):
         self.call_later(self.poll_player)
 
     async def on_unmount(self) -> None:
-        if self._artwork_task:
-            self._artwork_task.cancel()
-        if self._genius_task:
-            self._genius_task.cancel()
+        for task in (self._artwork_task, self._genius_task, self._fetch_task):
+            if task:
+                task.cancel()
         await self.client.aclose()
 
     def update_static(self, selector: str, value: str) -> None:
@@ -557,6 +556,7 @@ class GeniusTui(App):
         old_key = self.track.key if self.track else None
         self.track = track
         if track is None:
+            self.genius_url = None
             self.update_static("#time", "  0:00 / 0:00")
             self.update_static("#title", "  nothing playing")
             self.update_static("#artist-album", "  ")
@@ -783,12 +783,19 @@ class GeniusTui(App):
 
     def action_open_genius(self) -> None:
         if self.genius_url:
-            webbrowser.open(self.genius_url)
-            self.notify(f"Opened {self.genius_url}")
-        elif self.track:
-            self.notify("No Genius page found yet for this track.", severity="warning")
-        else:
+            if webbrowser.open(self.genius_url):
+                self.notify(f"Opened {self.genius_url}")
+            else:
+                self.notify(
+                    f"Couldn't open a browser for {self.genius_url}.",
+                    severity="warning",
+                )
+        elif not self.track:
             self.notify("Nothing playing.", severity="warning")
+        elif self._genius_task is not None:
+            self.notify("Still looking up the Genius page…")
+        else:
+            self.notify("No Genius page found for this track.", severity="warning")
 
 
 def run() -> None:
