@@ -50,10 +50,12 @@ terminal.
 | `f`   | Toggle auto-follow (free scrolling)      |
 | `h`   | Toggle footer                            |
 | `l`   | Toggle lyrics-only mode                  |
+| `o`   | Open the song's Genius page in a browser |
 
 ## Behavior notes
 
 - Synced (LRCLIB): current line is highlighted and centered.
 - Plain (LRCLIB/Genius): position is estimated from track progress, so
   scrolling is approximate.
-- Status bar shows position, lyrics source, detection backend, and offset.
+- Header shows position, lyrics source, and detection backend; a non-zero
+  sync offset appears top-right (e.g. `delay +1.5s`).
