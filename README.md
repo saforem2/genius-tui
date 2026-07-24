@@ -1,5 +1,18 @@
 # genius-tui
 
+> [!IMPORTANT]
+> **This project has moved and been renamed to [`croon`](https://github.com/saforem2/croon).**
+> `genius-tui` is no longer maintained. Please use croon instead:
+>
+> ```sh
+> uvx croon            # run without installing
+> # or
+> pip install croon && croon
+> ```
+>
+> Existing `genius-tui` releases on PyPI remain available but will not receive
+> updates. This repository is archived.
+
 Synced lyrics for whatever is playing, in your terminal.
 
 Detects the currently playing song **system-wide on macOS**, fetches
